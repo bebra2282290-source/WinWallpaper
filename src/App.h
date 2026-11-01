@@ -22,7 +22,7 @@ enum : ULONG_PTR {
 
 class App {
 public:
-    int Run(HINSTANCE instance, const std::wstring& video, bool autostart);
+    int Run(HINSTANCE instance, const std::wstring& video, bool autostart, bool log);
 
     // Called from the WinEvent hook: something changed on screen.
     void CheckSoon();

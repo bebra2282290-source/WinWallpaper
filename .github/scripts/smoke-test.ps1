@@ -1,11 +1,12 @@
 # Smoke test for WinWallpaper on a real Windows desktop (used by CI).
 #
 # 1. Generates a test video that alternates between magenta and cyan.
-# 2. Starts WinWallpaper with it and checks that those colours appear on the
-#    desktop (i.e. the video plays behind the icons).
-# 3. Opens a maximized window and checks that the app stops using CPU.
-# 4. Closes the window and checks that the video comes back.
-# 5. Sends --exit and checks that the app quits and the video disappears.
+# 2. Tries every presentation mode / window type combination and reports
+#    which ones make the video visible (diagnostics, never fails the job).
+# 3. With the default settings: checks that the colours appear on the
+#    desktop (i.e. the video plays behind the icons), that the app stops
+#    using CPU under a maximized window, that the video comes back when the
+#    window closes, and that --exit quits and removes the video.
 
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
@@ -109,6 +110,10 @@ function Get-ScreenColor([int]$x, [int]$y) {
     }
 }
 
+function Format-Color($c) {
+    return "rgb($($c.R),$($c.G),$($c.B))"
+}
+
 function Get-ColorName($c) {
     if ($c.R -gt 170 -and $c.G -lt 100 -and $c.B -gt 170) { return 'magenta' }
     if ($c.R -lt 100 -and $c.G -gt 170 -and $c.B -gt 170) { return 'cyan' }
@@ -148,7 +153,9 @@ function Watch-Desktop([int]$seconds) {
 }
 
 function Format-Seen($seen) {
-    return "magenta=$($seen.magenta) cyan=$($seen.cyan) other=$($seen.other)"
+    $sample = ''
+    try { $sample = ' sample=' + (Format-Color (Get-ScreenColor $script:points[0][0] $script:points[0][1])) } catch { }
+    return "magenta=$($seen.magenta) cyan=$($seen.cyan) other=$($seen.other)$sample"
 }
 
 function Measure-CpuPercent([System.Diagnostics.Process]$p, [int]$seconds) {
@@ -200,13 +207,64 @@ Start-Sleep -Seconds 2
 $before = Watch-Desktop 2
 Write-Host "Desktop colours before start: $(Format-Seen $before)"
 
-Section "Start WinWallpaper"
-# Portable mode: settings go next to the copied exe, not into %APPDATA%.
+# Portable mode: settings and the log go next to the copied exe, not into %APPDATA%.
 $appDir = Join-Path $OutDir 'app'
 New-Item -ItemType Directory -Force $appDir | Out-Null
-Copy-Item $Exe (Join-Path $appDir 'WinWallpaper.exe') -Force
-New-Item -ItemType File -Force (Join-Path $appDir 'WinWallpaper.ini') | Out-Null
-$proc = Start-Process (Join-Path $appDir 'WinWallpaper.exe') -ArgumentList "`"$video`"" -PassThru
+$appExe = Join-Path $appDir 'WinWallpaper.exe'
+$iniPath = Join-Path $appDir 'WinWallpaper.ini'
+$logPath = Join-Path $appDir 'WinWallpaper.log'
+Copy-Item $Exe $appExe -Force
+
+function Write-Settings([int]$presentMode, [int]$layered) {
+    $text = "[WinWallpaper]`r`nPresentMode=$presentMode`r`nLayeredWindow=$layered`r`nLog=1`r`n"
+    [System.IO.File]::WriteAllText($iniPath, $text, [System.Text.Encoding]::ASCII)
+}
+
+function Start-App {
+    return Start-Process $appExe -ArgumentList "`"$video`"", '--log' -PassThru
+}
+
+function Stop-App([System.Diagnostics.Process]$p) {
+    Start-Process $appExe -ArgumentList '--exit' -Wait
+    if (-not $p.WaitForExit(10000)) {
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    return $true
+}
+
+function Show-Log([string]$indent) {
+    Get-Content $logPath -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "$indent$_" }
+}
+
+Section "Presentation modes"
+# PresentMode: 1 flip, 2 blt, 3 DirectComposition. LayeredWindow: 1 yes, 2 no.
+$cases = @(
+    @('blt + layered', 2, 1),
+    @('flip + layered', 1, 1),
+    @('dcomp + layered', 3, 1),
+    @('blt + plain', 2, 2),
+    @('flip + plain', 1, 2),
+    @('dcomp + plain', 3, 2)
+)
+foreach ($case in $cases) {
+    Write-Settings $case[1] $case[2]
+    $p = Start-App
+    Start-Sleep -Seconds 6
+    $seen = Watch-Desktop 3
+    $exited = Stop-App $p
+    $visible = ($seen.magenta + $seen.cyan) -gt 0
+    $line = "{0,-16} visible={1,-5} {2}" -f $case[0], $visible, (Format-Seen $seen)
+    if (-not $exited) { $line += ' (had to be killed)' }
+    Write-Host $line
+    Show-Log '    '
+    $summary.Add("Mode $line")
+    Start-Sleep -Seconds 2
+}
+
+Section "Start WinWallpaper (default settings)"
+Write-Settings 0 0
+$proc = Start-App
 Start-Sleep -Seconds 8
 if ($proc.HasExited) {
     $failures.Add("WinWallpaper exited right after start (exit code $($proc.ExitCode))")
@@ -214,7 +272,7 @@ if ($proc.HasExited) {
 
 Section "Window tree"
 foreach ($line in [Native]::DesktopWindows()) { Write-Host "top-level: $line" }
-foreach ($line in [Native]::Children([Native]::FindWindow('Progman', $null))) { Write-Host "Progman child: $line" }
+foreach ($line in [Native]::Children([Native]::FindWindow('Progman', [NullString]::Value))) { Write-Host "Progman child: $line" }
 $surfaces = [Native]::WallpaperWindows()
 foreach ($line in $surfaces) { Write-Host "wallpaper window: $line" }
 $summary.Add("Wallpaper windows: $($surfaces.Count)")
@@ -260,11 +318,7 @@ $summary.Add("Resumed: $(Format-Seen $resumed)")
 if ($resumed.magenta -eq 0 -and $resumed.cyan -eq 0) { $failures.Add("The video did not come back after the window closed") }
 
 Section "Exit"
-Start-Process (Join-Path $appDir 'WinWallpaper.exe') -ArgumentList '--exit' -Wait
-if (-not $proc.WaitForExit(10000)) {
-    $failures.Add("WinWallpaper did not exit after --exit")
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-}
+if (-not (Stop-App $proc)) { $failures.Add("WinWallpaper did not exit after --exit") }
 Start-Sleep -Seconds 2
 Save-Screenshot 'after-exit'
 $after = Watch-Desktop 2
@@ -272,7 +326,9 @@ Write-Host "Desktop colours after exit: $(Format-Seen $after)"
 $summary.Add("After exit: $(Format-Seen $after)")
 if ($after.magenta + $after.cyan -gt 0) { $failures.Add("The video frame stayed on the desktop after exit") }
 Write-Host "Settings file:"
-Get-Content (Join-Path $appDir 'WinWallpaper.ini') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+Get-Content $iniPath -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+Write-Host "Log:"
+Show-Log '  '
 
 Section "Result"
 if ($env:GITHUB_STEP_SUMMARY) {

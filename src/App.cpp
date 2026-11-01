@@ -1,6 +1,7 @@
 #include "App.h"
 
 #include "Activity.h"
+#include "Log.h"
 #include "Messages.h"
 #include "Strings.h"
 #include "resource.h"
@@ -93,6 +94,20 @@ BOOL CALLBACK CollectMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM param) {
     return TRUE;
 }
 
+void LogSystemInfo() {
+    using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+    OSVERSIONINFOW version{};
+    version.dwOSVersionInfoSize = sizeof(version);
+    if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll")) {
+        if (auto rtlGetVersion = reinterpret_cast<RtlGetVersionFn>(
+                reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")))) {
+            rtlGetVersion(&version);
+        }
+    }
+    Log::Write("WinWallpaper 1.0.0, Windows %lu.%lu build %lu", version.dwMajorVersion, version.dwMinorVersion,
+               version.dwBuildNumber);
+}
+
 void ApplyProcessPolicies(bool efficiencyMode) {
     if (!efficiencyMode) return;
     // The wallpaper must always yield to whatever the user is doing.
@@ -111,11 +126,15 @@ void ApplyProcessPolicies(bool efficiencyMode) {
 // ---------------------------------------------------------------------------
 // Startup and the message loop
 
-int App::Run(HINSTANCE instance, const std::wstring& video, bool autostart) {
+int App::Run(HINSTANCE instance, const std::wstring& video, bool autostart, bool log) {
     m_instance = instance;
     g_app = this;
 
     m_settings.Load();
+    if (log || m_settings.log) {
+        Log::Enable(Settings::Directory() + L"WinWallpaper.log");
+        LogSystemInfo();
+    }
     if (!video.empty()) {
         m_settings.video = video;
         m_settings.Save();
@@ -547,15 +566,25 @@ bool App::RebuildSurfaces() {
     // Right after login Explorer may still be building the desktop: retry a
     // few times before settling for the fallback layout.
     if (FindDesktopHost(m_host, m_desktopFailures >= 3)) {
+        const bool raised = m_host.layout == DesktopLayout::Raised;
+        PresentMode mode = m_settings.presentMode;
+        if (mode == PresentMode::Auto) mode = raised ? PresentMode::Blt : PresentMode::Flip;
+        const bool layered = m_settings.layeredWindow == LayeredWindow::Yes ||
+                             (m_settings.layeredWindow == LayeredWindow::Auto && raised);
+        Log::Write("Desktop: %s; Progman %p (exstyle 0x%08lX), parent %p, DefView %p, WorkerW %p; mode %d, layered %d",
+                   LayoutName(m_host.layout), static_cast<void*>(m_host.progman),
+                   static_cast<unsigned long>(GetWindowLongPtrW(m_host.progman, GWL_EXSTYLE)),
+                   static_cast<void*>(m_host.parent), static_cast<void*>(m_host.defView),
+                   static_cast<void*>(m_host.workerW), static_cast<int>(mode), layered ? 1 : 0);
+
         std::vector<RECT> monitors;
         EnumDisplayMonitors(nullptr, nullptr, CollectMonitor, reinterpret_cast<LPARAM>(&monitors));
-        const bool preferBlt =
-            m_settings.presentMode == PresentMode::Blt ||
-            (m_settings.presentMode == PresentMode::Auto && m_host.layout == DesktopLayout::Raised);
         for (const RECT& rc : monitors) {
-            HWND hwnd = CreateWallpaperWindow(m_host, rc, m_instance, m_hwnd);
+            HWND hwnd = CreateWallpaperWindow(m_host, rc, m_instance, m_hwnd, layered);
+            Log::Write("Monitor (%ld,%ld)-(%ld,%ld): window %p", rc.left, rc.top, rc.right, rc.bottom,
+                       static_cast<void*>(hwnd));
             if (!hwnd) continue;
-            if (FAILED(m_renderer.AddSurface(hwnd, preferBlt))) {
+            if (FAILED(m_renderer.AddSurface(hwnd, mode))) {
                 DestroyWindow(hwnd);
                 continue;
             }
@@ -636,6 +665,7 @@ void App::UpdatePlayback() {
         m_renderer.SetPlaying(play);
     }
     if (reason != m_reason) {
+        Log::Write("Playback: %s (reason %d)", play ? "playing" : "paused", static_cast<int>(reason));
         m_reason = reason;
         UpdateTray();
     }

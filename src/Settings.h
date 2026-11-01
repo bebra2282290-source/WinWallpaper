@@ -8,13 +8,19 @@ enum class Scaling : int {
     Stretch = 2, // stretch to the screen, ignoring the aspect ratio
 };
 
-// How frames reach the screen. "Auto" picks the flip model on the classic
-// desktop and the blt model on the Windows 11 24H2+ desktop, where the
-// wallpaper window has to be a layered window.
+// How frames reach the screen (advanced, settings file only).
 enum class PresentMode : int {
-    Auto = 0,
-    Flip = 1,
-    Blt = 2,
+    Auto = 0,  // picked per desktop layout
+    Flip = 1,  // DXGI flip-model swap chain on the window
+    Blt = 2,   // DXGI blt-model swap chain on the window
+    DComp = 3, // composition swap chain shown through DirectComposition
+};
+
+// Whether the wallpaper window is a layered window (advanced, settings file only).
+enum class LayeredWindow : int {
+    Auto = 0, // layered on the Windows 11 24H2+ desktop only
+    Yes = 1,
+    No = 2,
 };
 
 struct Settings {
@@ -27,9 +33,14 @@ struct Settings {
     bool pauseOnBattery = true;
     bool efficiencyMode = true; // low process priority + Windows "Efficiency mode" (EcoQoS)
     PresentMode presentMode = PresentMode::Auto;
+    LayeredWindow layeredWindow = LayeredWindow::Auto;
+    bool log = false;
 
     void Load();
     void Save() const;
+
+    // Folder that holds the settings file (and the optional log).
+    static std::wstring Directory();
 };
 
 namespace Autostart {

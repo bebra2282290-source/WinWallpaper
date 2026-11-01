@@ -150,7 +150,8 @@ bool ProbeDesktopHost(DesktopHost& host) {
     return progman && Probe(progman, host, true);
 }
 
-HWND CreateWallpaperWindow(const DesktopHost& host, const RECT& screenRect, HINSTANCE instance, HWND owner) {
+HWND CreateWallpaperWindow(const DesktopHost& host, const RECT& screenRect, HINSTANCE instance, HWND owner,
+                           bool layered) {
     if (!host.parent) return nullptr;
     RegisterSurfaceClass(instance);
 
@@ -158,7 +159,7 @@ HWND CreateWallpaperWindow(const DesktopHost& host, const RECT& screenRect, HINS
     const int height = screenRect.bottom - screenRect.top;
     HWND hwnd = nullptr;
 
-    if (host.layout == DesktopLayout::Raised) {
+    if (layered) {
         // Microsoft's guidance for the 24H2+ desktop: an opaque WS_EX_LAYERED
         // child of Progman, z-ordered under SHELLDLL_DefView. It is created as
         // a top-level window first, made opaque, then re-parented.
@@ -234,6 +235,15 @@ bool EnsureZOrder(const DesktopHost& host, const std::vector<HWND>& windows) {
     }
     SetWindowPos(host.workerW, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return false;
+}
+
+const char* LayoutName(DesktopLayout layout) {
+    switch (layout) {
+    case DesktopLayout::Legacy: return "legacy (WorkerW behind the icons)";
+    case DesktopLayout::Raised: return "raised (Windows 11 24H2+, children of Progman)";
+    case DesktopLayout::ProgmanFallback: return "fallback (child of Progman)";
+    default: return "none";
+    }
 }
 
 void RefreshDesktop(const DesktopHost& host) {

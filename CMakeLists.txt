@@ -19,6 +19,7 @@ add_executable(WinWallpaper WIN32
     src/App.cpp
     src/Activity.cpp
     src/Desktop.cpp
+    src/Log.cpp
     src/Settings.cpp
     src/Strings.cpp
     src/VideoRenderer.cpp
@@ -32,7 +33,7 @@ target_compile_definitions(WinWallpaper PRIVATE
 )
 
 target_link_libraries(WinWallpaper PRIVATE
-    d3d11 dxgi
+    d3d11 dxgi dcomp
     mfplat mfuuid
     dwmapi wtsapi32 comdlg32 shell32 ole32 oleaut32 uuid
     user32 gdi32 advapi32

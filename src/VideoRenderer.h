@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <dcomp.h>
 #include <dxgi1_2.h>
 #include <mfapi.h>
 #include <mfmediaengine.h>
@@ -53,9 +54,9 @@ public:
     void Shutdown();
     bool IsInitialized() const { return m_device != nullptr; }
 
-    // Surfaces are wallpaper windows (one per monitor). preferBlt selects the
-    // blt presentation model, needed for layered windows.
-    HRESULT AddSurface(HWND hwnd, bool preferBlt);
+    // Surfaces are wallpaper windows (one per monitor). `mode` must not be
+    // Auto; if it fails the next simpler model is tried (DComp -> Flip -> Blt).
+    HRESULT AddSurface(HWND hwnd, PresentMode mode);
     void ClearSurfaces();
     void SetSurfaceVisible(size_t index, bool visible);
 
@@ -77,10 +78,15 @@ private:
         HWND hwnd = nullptr;
         Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain;
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+        Microsoft::WRL::ComPtr<IDCompositionTarget> target; // DComp mode only
+        Microsoft::WRL::ComPtr<IDCompositionVisual> visual; // DComp mode only
         UINT width = 0;
         UINT height = 0;
         bool visible = true;
+        HRESULT lastError = S_OK; // last logged failure, to avoid flooding the log
     };
+
+    HRESULT CreateCompositionSwapChain(HWND hwnd, DXGI_SWAP_CHAIN_DESC1 desc, Surface& surface);
 
     HRESULT CreateDevice();
     void ReleaseDevice();
@@ -96,6 +102,7 @@ private:
     Microsoft::WRL::ComPtr<IDXGIFactory2> m_factory;
     Microsoft::WRL::ComPtr<IDXGIOutput> m_output; // used to wait for vblank
     Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> m_dxgiManager;
+    Microsoft::WRL::ComPtr<IDCompositionDevice> m_dcomp; // created on first use
 
     // Everything below is shared with the render thread and guarded by m_mutex.
     std::mutex m_mutex;
@@ -120,4 +127,6 @@ private:
     // Render thread only.
     int m_fastVblanks = 0;
     int m_vblankBackoff = 0;
+    unsigned m_framesSinceReport = 0;
+    LONGLONG m_lastReport = 0;
 };

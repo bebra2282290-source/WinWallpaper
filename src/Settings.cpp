@@ -111,7 +111,9 @@ void Settings::Load() {
     pauseCovered = ReadBool(L"PauseCovered", true);
     pauseOnBattery = ReadBool(L"PauseOnBattery", true);
     efficiencyMode = ReadBool(L"EfficiencyMode", true);
-    presentMode = static_cast<PresentMode>(ReadInt(L"PresentMode", 0, 0, 2));
+    presentMode = static_cast<PresentMode>(ReadInt(L"PresentMode", 0, 0, 3));
+    layeredWindow = static_cast<LayeredWindow>(ReadInt(L"LayeredWindow", 0, 0, 2));
+    log = ReadBool(L"Log", false);
 }
 
 void Settings::Save() const {
@@ -126,6 +128,14 @@ void Settings::Save() const {
     WriteInt(L"PauseOnBattery", pauseOnBattery ? 1 : 0);
     WriteInt(L"EfficiencyMode", efficiencyMode ? 1 : 0);
     WriteInt(L"PresentMode", static_cast<int>(presentMode));
+    WriteInt(L"LayeredWindow", static_cast<int>(layeredWindow));
+    WriteInt(L"Log", log ? 1 : 0);
+}
+
+std::wstring Settings::Directory() {
+    const std::wstring& ini = IniPath();
+    size_t slash = ini.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : ini.substr(0, slash + 1);
 }
 
 namespace Autostart {

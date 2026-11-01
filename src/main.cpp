@@ -1,7 +1,7 @@
 // WinWallpaper: a lightweight video wallpaper for the Windows desktop.
 //
 // Usage:
-//   WinWallpaper.exe [video file] [--autostart] [--exit]
+//   WinWallpaper.exe [video file] [--autostart] [--exit] [--log]
 //
 // Only one instance runs at a time. Starting the program again passes the
 // command line to the running instance: a file name switches the video,
@@ -60,6 +60,7 @@ void ForwardToRunningInstance(const std::wstring& video, bool exitRequested) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     bool autostart = false;
     bool exitRequested = false;
+    bool log = false;
     std::wstring video;
 
     int argc = 0;
@@ -70,6 +71,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                 autostart = true;
             } else if (arg == L"--exit") {
                 exitRequested = true;
+            } else if (arg == L"--log") {
+                log = true;
             } else if (video.empty() && !arg.empty() && arg[0] != L'-') {
                 video = FullPath(arg);
             }
@@ -100,7 +103,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     int exitCode = 0;
     {
         App app;
-        exitCode = app.Run(instance, video, autostart);
+        exitCode = app.Run(instance, video, autostart, log);
     }
 
     MFShutdown();

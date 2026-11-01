@@ -37,7 +37,12 @@ bool ProbeDesktopHost(DesktopHost& host);
 
 // Creates a wallpaper window covering screenRect (in screen coordinates) and
 // attaches it behind the desktop icons. Paint notifications go to `owner`.
-HWND CreateWallpaperWindow(const DesktopHost& host, const RECT& screenRect, HINSTANCE instance, HWND owner);
+// `layered` makes it an opaque layered window, which gets its own
+// redirection surface (needed under Progman on the 24H2+ desktop).
+HWND CreateWallpaperWindow(const DesktopHost& host, const RECT& screenRect, HINSTANCE instance, HWND owner,
+                           bool layered);
+
+const char* LayoutName(DesktopLayout layout);
 
 // True while Explorer's windows we are attached to still exist and still own
 // our windows. False after Explorer restarts or rebuilds the desktop.

@@ -1,5 +1,6 @@
 #include "VideoRenderer.h"
 
+#include "Log.h"
 #include "Messages.h"
 
 #include <d3d10.h> // ID3D10Multithread
@@ -185,7 +186,10 @@ HRESULT VideoRenderer::CreateDevice() {
     if (FAILED(hr)) hr = create(nullptr, D3D_DRIVER_TYPE_HARDWARE, videoFlags);
     if (FAILED(hr)) hr = create(nullptr, D3D_DRIVER_TYPE_HARDWARE, D3D11_CREATE_DEVICE_BGRA_SUPPORT);
     if (FAILED(hr)) hr = create(nullptr, D3D_DRIVER_TYPE_WARP, D3D11_CREATE_DEVICE_BGRA_SUPPORT);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) {
+        Log::Write("D3D11CreateDevice failed: 0x%08lX", static_cast<unsigned long>(hr));
+        return hr;
+    }
 
     // The Media Engine uses the device from its own threads.
     ComPtr<ID3D10Multithread> multithread;
@@ -213,6 +217,15 @@ HRESULT VideoRenderer::CreateDevice() {
         }
     }
 
+    if (Log::Enabled()) {
+        DXGI_ADAPTER_DESC desc{};
+        deviceAdapter->GetDesc(&desc);
+        Log::Write("GPU: %s, feature level 0x%X, video support %s, vblank output %s",
+                   Log::Utf8(desc.Description).c_str(), static_cast<unsigned>(m_device->GetFeatureLevel()),
+                   (m_device->GetCreationFlags() & D3D11_CREATE_DEVICE_VIDEO_SUPPORT) ? "yes" : "no",
+                   m_output ? "yes" : "no");
+    }
+
     UINT token = 0;
     hr = MFCreateDXGIDeviceManager(&token, &m_dxgiManager);
     if (FAILED(hr)) return hr;
@@ -220,6 +233,7 @@ HRESULT VideoRenderer::CreateDevice() {
 }
 
 void VideoRenderer::ReleaseDevice() {
+    m_dcomp.Reset();
     m_dxgiManager.Reset();
     m_output.Reset();
     m_factory.Reset();
@@ -231,7 +245,32 @@ void VideoRenderer::ReleaseDevice() {
     m_device.Reset();
 }
 
-HRESULT VideoRenderer::AddSurface(HWND hwnd, bool preferBlt) {
+HRESULT VideoRenderer::CreateCompositionSwapChain(HWND hwnd, DXGI_SWAP_CHAIN_DESC1 desc, Surface& surface) {
+    HRESULT hr = S_OK;
+    if (!m_dcomp) {
+        ComPtr<IDXGIDevice> dxgiDevice;
+        hr = m_device.As(&dxgiDevice);
+        if (SUCCEEDED(hr)) hr = DCompositionCreateDevice(dxgiDevice.Get(), IID_PPV_ARGS(&m_dcomp));
+        if (FAILED(hr)) return hr;
+    }
+    desc.BufferCount = 2;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.Scaling = DXGI_SCALING_STRETCH;
+    hr = m_factory->CreateSwapChainForComposition(m_device.Get(), &desc, nullptr, &surface.swapChain);
+    if (SUCCEEDED(hr)) hr = m_dcomp->CreateTargetForHwnd(hwnd, TRUE, &surface.target);
+    if (SUCCEEDED(hr)) hr = m_dcomp->CreateVisual(&surface.visual);
+    if (SUCCEEDED(hr)) hr = surface.visual->SetContent(surface.swapChain.Get());
+    if (SUCCEEDED(hr)) hr = surface.target->SetRoot(surface.visual.Get());
+    if (SUCCEEDED(hr)) hr = m_dcomp->Commit();
+    if (FAILED(hr)) {
+        surface.target.Reset();
+        surface.visual.Reset();
+        surface.swapChain.Reset();
+    }
+    return hr;
+}
+
+HRESULT VideoRenderer::AddSurface(HWND hwnd, PresentMode mode) {
     if (!m_device) return E_UNEXPECTED;
     RECT rc{};
     GetClientRect(hwnd, &rc);
@@ -250,22 +289,34 @@ HRESULT VideoRenderer::AddSurface(HWND hwnd, bool preferBlt) {
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
     HRESULT hr = E_FAIL;
-    if (!preferBlt) {
+    const char* used = "none";
+    if (mode == PresentMode::DComp) {
+        hr = CreateCompositionSwapChain(hwnd, desc, surface);
+        Log::Write("DirectComposition swap chain: 0x%08lX", static_cast<unsigned long>(hr));
+        if (SUCCEEDED(hr)) used = "DirectComposition";
+    }
+    if (FAILED(hr) && mode != PresentMode::Blt) {
         // Flip model: DWM takes our buffer directly, no extra copy.
         desc.BufferCount = 2;
         for (DXGI_SWAP_EFFECT effect : {DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL}) {
             desc.SwapEffect = effect;
             hr = m_factory->CreateSwapChainForHwnd(m_device.Get(), hwnd, &desc, nullptr, nullptr, &surface.swapChain);
-            if (SUCCEEDED(hr)) break;
+            Log::Write("Flip swap chain (effect %d): 0x%08lX", static_cast<int>(effect), static_cast<unsigned long>(hr));
+            if (SUCCEEDED(hr)) {
+                used = "flip";
+                break;
+            }
         }
     }
     if (FAILED(hr)) {
         desc.BufferCount = 1;
         desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
         hr = m_factory->CreateSwapChainForHwnd(m_device.Get(), hwnd, &desc, nullptr, nullptr, &surface.swapChain);
+        Log::Write("Blt swap chain: 0x%08lX", static_cast<unsigned long>(hr));
+        if (SUCCEEDED(hr)) used = "blt";
     }
     if (FAILED(hr)) return hr;
-    m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
+    if (!surface.target) m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
 
     // In D3D11 buffer 0 always refers to the current back buffer, so one view is enough.
     ComPtr<ID3D11Texture2D> backBuffer;
@@ -276,7 +327,9 @@ HRESULT VideoRenderer::AddSurface(HWND hwnd, bool preferBlt) {
     if (surface.rtv) {
         const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         m_context->ClearRenderTargetView(surface.rtv.Get(), black);
-        surface.swapChain->Present(0, 0);
+        hr = surface.swapChain->Present(0, 0);
+        Log::Write("Surface %p %ux%u uses %s presentation, first present 0x%08lX", static_cast<void*>(hwnd),
+                   surface.width, surface.height, used, static_cast<unsigned long>(hr));
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -293,6 +346,7 @@ void VideoRenderer::ClearSurfaces() {
         old.swap(m_surfaces);
     }
     old.clear();
+    if (m_dcomp) m_dcomp->Commit();
     if (m_context) m_context->Flush(); // swap chain destruction is deferred until a flush
 }
 
@@ -451,6 +505,7 @@ void VideoRenderer::DeselectAudioLocked() {
         PropVariantClear(&value);
     }
     if (changed && SUCCEEDED(m_engineEx->ApplyStreamSelections())) m_audioDeselected = true;
+    Log::Write("Audio track %s", m_audioDeselected ? "deselected (not decoded)" : "kept (muted)");
 }
 
 EngineStatus VideoRenderer::HandleEngineEvent(const EngineEvent& event, HRESULT* error) {
@@ -459,6 +514,12 @@ EngineStatus VideoRenderer::HandleEngineEvent(const EngineEvent& event, HRESULT*
     case MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_engine) break;
+        if (Log::Enabled()) {
+            DWORD w = 0, h = 0;
+            m_engine->GetNativeVideoSize(&w, &h);
+            Log::Write("Video loaded: %lux%lu, duration %.2f s", static_cast<unsigned long>(w),
+                       static_cast<unsigned long>(h), m_engine->GetDuration());
+        }
         DeselectAudioLocked();
         if (m_pendingSeek > 0.0) {
             m_engine->SetCurrentTime(m_pendingSeek);
@@ -473,6 +534,8 @@ EngineStatus VideoRenderer::HandleEngineEvent(const EngineEvent& event, HRESULT*
         break;
     case MF_MEDIA_ENGINE_EVENT_ERROR: {
         HRESULT hr = static_cast<HRESULT>(event.param2);
+        Log::Write("Media Engine error %lu, 0x%08lX", static_cast<unsigned long>(event.param1),
+                   static_cast<unsigned long>(hr));
         if (error) *error = hr;
         return IsDeviceLost(hr) ? EngineStatus::DeviceLost : EngineStatus::Error;
     }
@@ -573,7 +636,13 @@ void VideoRenderer::DrawFrameLocked() {
             m_context->ClearRenderTargetView(surface.rtv.Get(), black);
         }
         HRESULT hr = m_engine->TransferVideoFrame(backBuffer.Get(), &src, &dst, &border);
-        if (SUCCEEDED(hr)) hr = surface.swapChain->Present(0, 0);
+        const bool transferred = SUCCEEDED(hr);
+        if (transferred) hr = surface.swapChain->Present(0, 0);
+        if (FAILED(hr) && hr != surface.lastError) {
+            Log::Write("%s failed on surface %p: 0x%08lX", transferred ? "Present" : "TransferVideoFrame",
+                       static_cast<void*>(surface.hwnd), static_cast<unsigned long>(hr));
+        }
+        surface.lastError = FAILED(hr) ? hr : S_OK;
         if (IsDeviceLost(hr)) {
             m_deviceLost = true;
             PostMessageW(m_notifyWindow, WM_APP_DEVICE_LOST, 0, 0);
@@ -581,4 +650,14 @@ void VideoRenderer::DrawFrameLocked() {
         }
     }
     m_lastPresent = QpcNow();
+
+    if (Log::Enabled()) {
+        ++m_framesSinceReport;
+        if (m_lastPresent - m_lastReport >= 5 * QpcFrequency()) {
+            Log::Write("Presented %u frames in the last %.1f s", m_framesSinceReport,
+                       m_lastReport ? static_cast<double>(m_lastPresent - m_lastReport) / QpcFrequency() : 0.0);
+            m_framesSinceReport = 0;
+            m_lastReport = m_lastPresent;
+        }
+    }
 }
