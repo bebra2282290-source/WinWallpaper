@@ -136,13 +136,14 @@ function Save-Screenshot([string]$name) {
 
 # Samples a few desktop points for $seconds; returns how often each colour was seen.
 function Watch-Desktop([int]$seconds) {
-    $seen = @{ magenta = 0; cyan = 0; other = 0 }
+    $seen = @{ magenta = 0; cyan = 0; other = 0; sample = '' }
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
         foreach ($p in $script:points) {
             try {
                 $c = Get-ScreenColor $p[0] $p[1]
                 $seen[(Get-ColorName $c)]++
+                $seen['sample'] = Format-Color $c
             } catch {
                 $seen['other']++
             }
@@ -153,9 +154,7 @@ function Watch-Desktop([int]$seconds) {
 }
 
 function Format-Seen($seen) {
-    $sample = ''
-    try { $sample = ' sample=' + (Format-Color (Get-ScreenColor $script:points[0][0] $script:points[0][1])) } catch { }
-    return "magenta=$($seen.magenta) cyan=$($seen.cyan) other=$($seen.other)$sample"
+    return "magenta=$($seen.magenta) cyan=$($seen.cyan) other=$($seen.other) last=$($seen.sample)"
 }
 
 function Measure-CpuPercent([System.Diagnostics.Process]$p, [int]$seconds) {

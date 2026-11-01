@@ -10,7 +10,7 @@ enum class Scaling : int {
 
 // How frames reach the screen (advanced, settings file only).
 enum class PresentMode : int {
-    Auto = 0,  // picked per desktop layout
+    Auto = 0,  // currently the flip model
     Flip = 1,  // DXGI flip-model swap chain on the window
     Blt = 2,   // DXGI blt-model swap chain on the window
     DComp = 3, // composition swap chain shown through DirectComposition

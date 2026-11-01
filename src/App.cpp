@@ -567,8 +567,10 @@ bool App::RebuildSurfaces() {
     // few times before settling for the fallback layout.
     if (FindDesktopHost(m_host, m_desktopFailures >= 3)) {
         const bool raised = m_host.layout == DesktopLayout::Raised;
+        // The flip model shows up on both layouts; a blt-model swap chain stays
+        // invisible under the 24H2+ Progman (checked by the CI smoke test).
         PresentMode mode = m_settings.presentMode;
-        if (mode == PresentMode::Auto) mode = raised ? PresentMode::Blt : PresentMode::Flip;
+        if (mode == PresentMode::Auto) mode = PresentMode::Flip;
         const bool layered = m_settings.layeredWindow == LayeredWindow::Yes ||
                              (m_settings.layeredWindow == LayeredWindow::Auto && raised);
         Log::Write("Desktop: %s; Progman %p (exstyle 0x%08lX), parent %p, DefView %p, WorkerW %p; mode %d, layered %d",
