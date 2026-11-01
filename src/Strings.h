@@ -1,0 +1,50 @@
+#pragma once
+
+// User-visible strings. Russian is used when the Windows display language is
+// Russian, English otherwise.
+enum class S : int {
+    AppName,
+    NoVideo,
+    StatusPlaying,
+    StatusPaused,
+    StatusStopped,
+    ReasonUser,
+    ReasonFullscreen,
+    ReasonCovered,
+    ReasonBattery,
+    ReasonLocked,
+    ReasonDisplayOff,
+    ReasonNoDesktop,
+    MenuSelectVideo,
+    MenuPause,
+    MenuScaling,
+    ScaleFill,
+    ScaleFit,
+    ScaleStretch,
+    MenuSound,
+    SoundOff,
+    MenuFps,
+    FpsOriginal,
+    Fps30,
+    Fps15,
+    MenuSaving,
+    PauseFullscreen,
+    PauseCovered,
+    PauseBattery,
+    MenuAutostart,
+    MenuRemove,
+    MenuExit,
+    DialogTitle,
+    FilterVideo,
+    FilterAll,
+    HintFirstRun,
+    ErrFileMissing,
+    ErrPlayback,
+    ErrDesktop,
+    ErrD3D,
+    ErrMediaFoundation,
+    ErrCode,
+    Count
+};
+
+const wchar_t* T(S id);
